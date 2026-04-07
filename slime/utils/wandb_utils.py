@@ -156,4 +156,6 @@ def _init_wandb_common():
     wandb.define_metric("passrate/*", step_metric="rollout/step")
     wandb.define_metric("eval/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
+    wandb.define_metric("val/step")
+    wandb.define_metric("val/*", step_metric="val/step")
     wandb.define_metric("perf/*", step_metric="rollout/step")

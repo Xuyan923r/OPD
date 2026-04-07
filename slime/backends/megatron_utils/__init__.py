@@ -36,7 +36,7 @@ try:
 
     patch_rotary_embedding(Qwen3VLTextRotaryEmbedding)
     patch_rotary_embedding(Qwen3VLMoETextRotaryEmbedding)
-except ImportError:
-    pass
+except Exception as e:
+    logging.warning("Skipping optional megatron.bridge Qwen-VL patch due to import failure: %s", e)
 
 logging.getLogger("megatron").setLevel(logging.WARNING)

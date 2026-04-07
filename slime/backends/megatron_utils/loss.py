@@ -42,16 +42,18 @@ def get_responses(
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Yield response-aligned `(logits_chunk, tokens_chunk)` pairs per sample.
 
-    After squeezing batch dimension and applying temperature scaling, this
-    function extracts the logits and tokens corresponding to response segments
-    for each sample. When context parallelism is disabled, it slices directly
-    from the concatenated sequence. With context parallelism enabled, it
-    handles split sequences across ranks.
+    After squeezing the batch dimension, this function extracts the logits and
+    tokens corresponding to response segments for each sample. Temperature
+    scaling is deferred to the downstream chunked log-prob computation to
+    avoid creating an extra full-size logits allocation. When context
+    parallelism is disabled, it slices directly from the concatenated
+    sequence. With context parallelism enabled, it handles split sequences
+    across ranks.
 
     Args:
         logits: Model outputs with shape `[1, T, V]` (policy) or `[1, T, 1]`
             (value). Must be float32.
-        args: Configuration containing `rollout_temperature` for scaling.
+        args: Configuration used to interpret layout and CP behavior.
         unconcat_tokens: List of token tensors (prompt+response) per sample.
         total_lengths: Total sequence lengths (prompt+response) per sample.
         response_lengths: Response segment lengths per sample.
@@ -72,9 +74,6 @@ def get_responses(
     else:
         assert max_seq_lens is not None
         logits = logits.view(-1, logits.size(-1))
-
-    if args.rollout_temperature != 1.0:
-        logits = logits.div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
@@ -272,6 +271,7 @@ def get_log_probs_and_entropy(
             mpu.get_tensor_model_parallel_group(),
             with_entropy=with_entropy,
             chunk_size=args.log_probs_chunk_size,
+            temperature=args.rollout_temperature,
         )
 
         log_probs_list.append(log_prob.squeeze(-1))
@@ -648,13 +648,15 @@ def policy_loss_function(
     total_lengths = batch["total_lengths"]
     max_seq_lens = batch.get("max_seq_lens", None)
 
+    need_entropy = args.entropy_coef != 0
+
     _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
         args=args,
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=total_lengths,
         response_lengths=response_lengths,
-        with_entropy=True,
+        with_entropy=need_entropy,
         max_seq_lens=max_seq_lens,
     )
 
@@ -788,9 +790,12 @@ def policy_loss_function(
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
-    entropy = log_probs_and_entropy["entropy"]
-    entropy = torch.cat(entropy, dim=0)
-    entropy_loss = sum_of_sample_mean(entropy)
+    if need_entropy:
+        entropy = log_probs_and_entropy["entropy"]
+        entropy = torch.cat(entropy, dim=0)
+        entropy_loss = sum_of_sample_mean(entropy)
+    else:
+        entropy_loss = torch.zeros_like(pg_loss)
 
     # OPSD: optionally zero out pg_loss in pure mode (JSD-only training)
     if getattr(args, "opsd_pure_mode", False) and args.use_opd and args.opd_type == "opsd":

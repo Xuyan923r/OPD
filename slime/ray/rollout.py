@@ -1,5 +1,6 @@
 import dataclasses
 import itertools
+import json
 import logging
 import multiprocessing
 import os
@@ -22,6 +23,7 @@ from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_inf
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import Box, group_by, load_function
+from slime.utils.processing_utils import load_tokenizer
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import Sample
 
@@ -279,6 +281,9 @@ class RolloutManager:
         else:
             init_http_client(args)
             self.server = start_rollout_server(args, pg)
+        self._trajectory_tokenizer = None
+        if self.args.save_rollout_trajectories_dir is not None:
+            self._trajectory_tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
@@ -337,6 +342,7 @@ class RolloutManager:
             self._try_ci_fault_injection()
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
+        self._save_rollout_trajectories(data, rollout_id=rollout_id)
         _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
             # if debug rollout only, we don't convert samples to train data and directly return
@@ -489,6 +495,83 @@ class RolloutManager:
                 )
 
             torch.save(dict(rollout_id=rollout_id, **dump_data), path)
+
+    @staticmethod
+    def _maybe_to_list(value):
+        if value is None:
+            return None
+        if isinstance(value, torch.Tensor):
+            return value.detach().cpu().tolist()
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        if isinstance(value, dict):
+            return {k: RolloutManager._maybe_to_list(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [RolloutManager._maybe_to_list(v) for v in value]
+        return value
+
+    def _build_trajectory_record(self, sample: Sample) -> dict[str, Any]:
+        response_token_ids = sample.tokens[-sample.response_length :] if sample.response_length > 0 else []
+        student_log_probs = self._maybe_to_list(sample.rollout_log_probs) or []
+        teacher_log_probs = self._maybe_to_list(sample.teacher_log_probs) or []
+
+        tokenizer = self._trajectory_tokenizer
+        if tokenizer is not None and response_token_ids:
+            response_tokens = tokenizer.convert_ids_to_tokens(response_token_ids)
+            response_token_text = [tokenizer.decode([tok], skip_special_tokens=False) for tok in response_token_ids]
+        else:
+            response_tokens = None
+            response_token_text = None
+
+        per_token = []
+        for i, token_id in enumerate(response_token_ids):
+            student_score = student_log_probs[i] if i < len(student_log_probs) else None
+            teacher_score = teacher_log_probs[i] if i < len(teacher_log_probs) else None
+            per_token.append(
+                {
+                    "position": i,
+                    "token_id": token_id,
+                    "token": response_tokens[i] if response_tokens is not None else None,
+                    "text": response_token_text[i] if response_token_text is not None else None,
+                    "student_log_prob": student_score,
+                    "teacher_log_prob": teacher_score,
+                    "student_minus_teacher": (
+                        None
+                        if student_score is None or teacher_score is None
+                        else float(student_score) - float(teacher_score)
+                    ),
+                }
+            )
+
+        return {
+            "sample_index": sample.index,
+            "group_index": sample.group_index,
+            "status": sample.status.value,
+            "prompt": sample.prompt,
+            "response": sample.response,
+            "label": sample.label,
+            "reward": self._maybe_to_list(sample.reward),
+            "metadata": self._maybe_to_list(sample.metadata),
+            "tokens": self._maybe_to_list(sample.tokens),
+            "response_length": sample.response_length,
+            "response_token_ids": response_token_ids,
+            "student_log_probs": student_log_probs,
+            "teacher_log_probs": teacher_log_probs,
+            "per_token_scores": per_token,
+        }
+
+    def _save_rollout_trajectories(self, samples: list[Sample], rollout_id: int):
+        if self.args.save_rollout_trajectories_dir is None:
+            return
+
+        out_dir = Path(self.args.save_rollout_trajectories_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"rollout_{rollout_id:06d}.jsonl"
+        logger.info(f"Save rollout trajectories to {path}")
+
+        with path.open("w", encoding="utf-8") as f:
+            for sample in samples:
+                f.write(json.dumps(self._build_trajectory_record(sample), ensure_ascii=False) + "\n")
 
     def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
         if self.custom_reward_post_process_func is not None:
@@ -910,6 +993,10 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
 
     step = compute_rollout_step(args, rollout_id)
     log_dict["eval/step"] = step
+    if len(data) == 1:
+        only_key = next(iter(data))
+        log_dict["val/accuracy"] = log_dict[f"eval/{only_key}"]
+        log_dict["val/step"] = step
     logging_utils.log(args, log_dict, step_key="eval/step")
 
     return log_dict

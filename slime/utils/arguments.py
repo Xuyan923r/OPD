@@ -1255,6 +1255,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--save-rollout-trajectories-dir",
+                type=str,
+                default=None,
+                help=(
+                    "Save student rollout trajectories as JSONL files in this directory. "
+                    "Each rollout will produce one file containing prompt/response plus per-token "
+                    "student and teacher log-prob scores when available."
+                ),
+            )
+            parser.add_argument(
                 "--dump-details",
                 type=str,
                 default=None,
@@ -1769,6 +1779,8 @@ def slime_validate_args(args):
     if args.dump_details is not None:
         args.save_debug_rollout_data = f"{args.dump_details}/rollout_data/{{rollout_id}}.pt"
         args.save_debug_train_data = f"{args.dump_details}/train_data/{{rollout_id}}_{{rank}}.pt"
+        if args.save_rollout_trajectories_dir is None:
+            args.save_rollout_trajectories_dir = f"{args.dump_details}/rollout_trajectories"
 
     if args.load_debug_rollout_data is not None:
         logger.info(

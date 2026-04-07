@@ -7,8 +7,10 @@ __pycache__/
 *.so
 data/
 *.jsonl
+!MMLU-Pro-dev40-opsd-answer-only.jsonl
 *.pt
 *.ckpt
+models
 
 # Distribution / packaging
 .Python
@@ -78,6 +80,7 @@ docs/_build/
 # PyBuilder
 .pybuilder/
 target/
+OPD/.codex
 
 # Jupyter Notebook
 .ipynb_checkpoints
@@ -196,3 +199,7 @@ glm/
 _examples_synced/
 .env
 .DS_Store
+
+runlogs
+runs
+.codex

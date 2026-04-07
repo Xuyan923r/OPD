@@ -52,8 +52,8 @@ async def async_rm(args, sample: Sample, **kwargs):
         return 1 if grade_answer_verl(response, label) else 0
     elif rm_type == "f1":
         return f1_score(response, label)[0]
-    elif rm_type == "gpqa":
-        return compute_gpqa_reward(response, label, metadata=metadata)
+    elif rm_type in {"gpqa", "mmlu_pro"}:
+        return compute_gpqa_reward(response, label, metadata=metadata, prompt=sample.prompt)
     elif rm_type == "ifbench":
         from .ifbench import compute_ifbench_reward
 

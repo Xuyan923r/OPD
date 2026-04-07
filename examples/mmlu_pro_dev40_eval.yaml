@@ -1,0 +1,13 @@
+eval:
+  defaults:
+    input_key: prompt
+    label_key: answer
+    n_samples_per_eval_prompt: 1
+    temperature: 0.0
+    top_k: 1
+    max_response_len: 4096
+  datasets:
+    - name: mmlu_pro_dev40
+      path: /idfsdata/yexuyan/OPD/MMLU-Pro-dev40-opsd-answer-only.jsonl
+      rm_type: mmlu_pro
+      custom_generate_function_path: slime.rollout.generate_hub.mmlu_pro.generate_mmlu_pro_eval

@@ -1,5 +1,6 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
 import argparse
+import importlib.util
 import inspect
 import re
 from contextlib import nullcontext
@@ -54,6 +55,13 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
+def _has_transformer_engine() -> bool:
+    try:
+        return importlib.util.find_spec("transformer_engine") is not None
+    except Exception:
+        return False
+
+
 def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
@@ -82,6 +90,7 @@ def get_model_provider_func(
 
     if args.megatron_to_hf_mode == "bridge":
         from megatron.bridge import AutoBridge
+        from megatron.bridge.models.gpt_provider import local_layer_spec as bridge_local_layer_spec
 
         bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
         provider = bridge.to_megatron_provider(load_weights=False)
@@ -95,6 +104,18 @@ def get_model_provider_func(
             provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
             provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
+        if not _has_transformer_engine():
+            # Megatron Bridge defaults GPT-family providers to TE layer specs, but this
+            # environment intentionally runs without transformer_engine installed.
+            # For Qwen-family RMSNorm models, local spec also cannot work with
+            # sequence parallel because it falls back to torch RMSNorm.
+            args.sequence_parallel = False
+            provider.transformer_layer_spec = bridge_local_layer_spec
+            provider.sequence_parallel = False
+            if hasattr(provider, "use_transformer_engine_full_layer_spec"):
+                provider.use_transformer_engine_full_layer_spec = False
+            if hasattr(provider, "use_te_rng_tracker"):
+                provider.use_te_rng_tracker = False
         provider.finalize()
         return provider.provide
 
