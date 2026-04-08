@@ -2,7 +2,18 @@ import re
 import torch
 
 
+def _normalize_name(name: str) -> str:
+    # Some runtime wrappers prepend extra module prefixes or use decoder-prefixed names.
+    while name.startswith("module.module.module."):
+        name = name.replace("module.module.module.", "module.module.", 1)
+    if name.startswith("module.decoder."):
+        name = "module.module." + name[len("module.") :]
+    return name
+
+
 def convert_qwen2_to_hf(args, name, param):
+    name = _normalize_name(name)
+
     if name == "module.module.embedding.word_embeddings.weight":
         return [("model.embed_tokens.weight", param)]
     if name == "module.module.output_layer.weight":
@@ -57,9 +68,9 @@ def convert_qwen2_to_hf(args, name, param):
             ]
         elif rest == "mlp.linear_fc2.weight":
             return [(f"model.layers.{layer_idx}.mlp.down_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.layer_norm_weight":
+        elif rest in ("self_attention.linear_qkv.layer_norm_weight", "input_layernorm.weight"):
             return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
-        elif rest == "mlp.linear_fc1.layer_norm_weight":
+        elif rest in ("mlp.linear_fc1.layer_norm_weight", "pre_mlp_layernorm.weight", "post_attention_layernorm.weight"):
             return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
 
         # qk norm
@@ -67,5 +78,19 @@ def convert_qwen2_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.self_attn.q_norm.weight", param)]
         elif rest == "self_attention.k_layernorm.weight":
             return [(f"model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
+
+        # Newer naming variants that can appear in non-colocate update path.
+        elif rest.startswith("self_attention."):
+            suffix = rest[len("self_attention.") :]
+            if suffix in {
+                "input_layernorm.weight",
+                "self_attn.q_proj.weight",
+                "self_attn.k_proj.weight",
+                "self_attn.v_proj.weight",
+                "self_attn.o_proj.weight",
+                "self_attn.q_norm.weight",
+                "self_attn.k_norm.weight",
+            }:
+                return [(f"model.layers.{layer_idx}.{suffix}", param)]
 
     raise ValueError(f"Unknown parameter name: {name}")

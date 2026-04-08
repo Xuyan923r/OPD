@@ -30,46 +30,54 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-TEACHER_MODEL="${TEACHER_MODEL:-/idfsdata/yexuyan/OPD/models/Qwen3-14B}"
-STUDENT_MODEL="${STUDENT_MODEL:-/idfsdata/yexuyan/OPD/models/Qwen3-4B}"
+TEACHER_MODEL="${TEACHER_MODEL:-/idfsdata/yexuyan/OPD/models/Qwen3-8B}"
+STUDENT_MODEL="${STUDENT_MODEL:-/idfsdata/yexuyan/OPD/models/Qwen3-1.7B}"
 RAW_DATA="${RAW_DATA:-/idfsdata/yexuyan/OPD/data/science_with_answer.jsonl}"
-PREPARED_DATA="${PREPARED_DATA:-/idfsdata/yexuyan/OPD/data/science_with_answer_opd_prompt_only.jsonl}"
+PREPARED_DATA="${PREPARED_DATA:-/idfsdata/yexuyan/OPD/data/science_with_answer_opd_prompt_only_boxed.jsonl}"
 EVAL_CONFIG="${EVAL_CONFIG:-/idfsdata/yexuyan/OPD/examples/mmlu_pro_dev40_eval.yaml}"
 
-TEACHER_GPUS="${TEACHER_GPUS:-4,5}"
-STUDENT_GPUS="${STUDENT_GPUS:-6,7}"
+TEACHER_GPUS="${TEACHER_GPUS:-0}"
+STUDENT_GPUS="${STUDENT_GPUS:-1,2,3}"
 TEACHER_PORT="${TEACHER_PORT:-31081}"
 RAY_PORT="${RAY_PORT:-6381}"
 RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8266}"
 RAY_TEMP_DIR="${RAY_TEMP_DIR:-/idfsdata/yexuyan/}"
 
 NUM_EPOCH="${NUM_EPOCH:-1}"
-ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-32}"
+ROLLOUT_BATCH_SIZE="${ROLLOUT_BATCH_SIZE:-16}"
 N_SAMPLES_PER_PROMPT="${N_SAMPLES_PER_PROMPT:-4}"
-GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-128}"
+GLOBAL_BATCH_SIZE="${GLOBAL_BATCH_SIZE:-64}"
 ROLLOUT_MAX_PROMPT_LEN="${ROLLOUT_MAX_PROMPT_LEN:-4096}"
-ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-6144}"
+ROLLOUT_MAX_RESPONSE_LEN="${ROLLOUT_MAX_RESPONSE_LEN:-6000}"
 TRAIN_SEQ_LENGTH="${TRAIN_SEQ_LENGTH:-8192}"
 MAX_TOKENS_PER_GPU="${MAX_TOKENS_PER_GPU:-6144}"
 MICRO_BATCH_SIZE="${MICRO_BATCH_SIZE:-1}"
-LOG_PROBS_CHUNK_SIZE="${LOG_PROBS_CHUNK_SIZE:-256}"
+LOG_PROBS_CHUNK_SIZE="${LOG_PROBS_CHUNK_SIZE:-64}"
 TRAIN_MEMORY_MARGIN_BYTES="${TRAIN_MEMORY_MARGIN_BYTES:-1073741824}"
-TRAIN_PYTORCH_CUDA_ALLOC_CONF="${TRAIN_PYTORCH_CUDA_ALLOC_CONF:-}"
+TRAIN_PYTORCH_CUDA_ALLOC_CONF="${TRAIN_PYTORCH_CUDA_ALLOC_CONF:-max_split_size_mb:64,garbage_collection_threshold:0.6}"
 ENABLE_ACTIVATION_RECOMPUTE="${ENABLE_ACTIVATION_RECOMPUTE:-1}"
 RECOMPUTE_GRANULARITY="${RECOMPUTE_GRANULARITY:-full}"
 RECOMPUTE_METHOD="${RECOMPUTE_METHOD:-uniform}"
 RECOMPUTE_NUM_LAYERS="${RECOMPUTE_NUM_LAYERS:-1}"
 ENABLE_LOSS_RECOMPUTE="${ENABLE_LOSS_RECOMPUTE:-1}"
-TEACHER_MEM_FRACTION="${TEACHER_MEM_FRACTION:-0.78}"
-STUDENT_SGLANG_MEM_FRACTION="${STUDENT_SGLANG_MEM_FRACTION:-0.65}"
-SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS:-96}"
+TEACHER_MEM_FRACTION="${TEACHER_MEM_FRACTION:-0.85}"
+STUDENT_SGLANG_MEM_FRACTION="${STUDENT_SGLANG_MEM_FRACTION:-0.30}"
+SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS:-12}"
 WANDB_PROJECT="${WANDB_PROJECT:-OPSD}"
-EVAL_INTERVAL="${EVAL_INTERVAL:-25}"
-SAVE_INTERVAL="${SAVE_INTERVAL:-50}"
+DEFAULT_APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
+APPLY_CHAT_TEMPLATE_KWARGS="${APPLY_CHAT_TEMPLATE_KWARGS:-$DEFAULT_APPLY_CHAT_TEMPLATE_KWARGS}"
+EVAL_INTERVAL="${EVAL_INTERVAL:-5}"
+SAVE_INTERVAL="${SAVE_INTERVAL:-10}"
 MAX_CHECKPOINTS="${MAX_CHECKPOINTS:-10}"
 ENABLE_SEQUENCE_PARALLEL="${ENABLE_SEQUENCE_PARALLEL:-auto}"
 QKV_FORMAT="${QKV_FORMAT:-auto}"
 USE_DYNAMIC_BATCH_SIZE="${USE_DYNAMIC_BATCH_SIZE:-auto}"
+USE_COLOCATE="${USE_COLOCATE:-0}"
+TRAIN_ACTOR_GPUS_PER_NODE="${TRAIN_ACTOR_GPUS_PER_NODE:-2}"
+ROLLOUT_NUM_GPUS="${ROLLOUT_NUM_GPUS:-1}"
+ROLLOUT_NUM_GPUS_PER_ENGINE="${ROLLOUT_NUM_GPUS_PER_ENGINE:-1}"
+RAY_NUM_GPUS="${RAY_NUM_GPUS:-3}"
+TEACHER_TP="${TEACHER_TP:-1}"
 
 RUN_ID="${RUN_ID:-opd_qwen3_14b_to_4b_science_$(date -u +%Y%m%d_%H%M%S)}"
 RUN_ROOT="${RUN_ROOT:-${ROOT_DIR}/runs/${RUN_ID}}"
@@ -117,6 +125,7 @@ if [[ "${RUN_INNER}" != "1" ]]; then
       STUDENT_SGLANG_MEM_FRACTION="${STUDENT_SGLANG_MEM_FRACTION}" \
       SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS}" \
       WANDB_PROJECT="${WANDB_PROJECT}" \
+      APPLY_CHAT_TEMPLATE_KWARGS="${APPLY_CHAT_TEMPLATE_KWARGS}" \
       EVAL_INTERVAL="${EVAL_INTERVAL}" \
       SAVE_INTERVAL="${SAVE_INTERVAL}" \
       MAX_CHECKPOINTS="${MAX_CHECKPOINTS}" \
@@ -166,6 +175,7 @@ if [[ "${RUN_INNER}" != "1" ]]; then
     STUDENT_SGLANG_MEM_FRACTION="${STUDENT_SGLANG_MEM_FRACTION}" \
     SGLANG_MAX_RUNNING_REQUESTS="${SGLANG_MAX_RUNNING_REQUESTS}" \
     WANDB_PROJECT="${WANDB_PROJECT}" \
+    APPLY_CHAT_TEMPLATE_KWARGS="${APPLY_CHAT_TEMPLATE_KWARGS}" \
     EVAL_INTERVAL="${EVAL_INTERVAL}" \
     SAVE_INTERVAL="${SAVE_INTERVAL}" \
     MAX_CHECKPOINTS="${MAX_CHECKPOINTS}" \
@@ -267,7 +277,11 @@ fi
 if [[ "${QKV_FORMAT}" == "thd" && "${HAS_TRANSFORMER_ENGINE}" != "1" ]]; then
   echo "Warning: QKV_FORMAT=thd requires transformer_engine in this environment. Falling back to bshd." >&2
   QKV_FORMAT="bshd"
-  if [[ "${USE_DYNAMIC_BATCH_SIZE}" == "1" ]]; then
+  if [[ "${USE_COLOCATE}" == "1" ]]; then
+  TRAIN_ARGS+=(--colocate)
+fi
+
+if [[ "${USE_DYNAMIC_BATCH_SIZE}" == "1" ]]; then
     echo "Warning: USE_DYNAMIC_BATCH_SIZE=1 is incompatible with bshd. Falling back to fixed micro-batching." >&2
     USE_DYNAMIC_BATCH_SIZE=0
   fi
@@ -354,9 +368,6 @@ from pathlib import Path
 raw_path = Path(os.environ["RAW_DATA"])
 prepared_path = Path(os.environ["PREPARED_DATA"])
 
-if prepared_path.exists():
-    raise SystemExit(0)
-
 prepared_path.parent.mkdir(parents=True, exist_ok=True)
 count = 0
 with raw_path.open("r", encoding="utf-8") as src, prepared_path.open("w", encoding="utf-8") as dst:
@@ -374,8 +385,12 @@ with raw_path.open("r", encoding="utf-8") as src, prepared_path.open("w", encodi
         answer = item.get("answer")
         if not user_message or answer is None:
             continue
+        format_instruction = (
+            "\n\nRespond briefly. The last line must be exactly in the format: Final Answer: \\boxed{A}\n"
+            "Replace A with the single correct option letter. Do not put any other text inside \\boxed{}."
+        )
         cleaned = {
-            "messages": [{"role": "user", "content": user_message}],
+            "messages": [{"role": "user", "content": user_message + format_instruction}],
             "answer": answer,
             "source": item.get("source"),
         }
@@ -448,7 +463,7 @@ python -m sglang.launch_server \
   --model-path "${TEACHER_MODEL}" \
   --host 127.0.0.1 \
   --port "${TEACHER_PORT}" \
-  --tp 2 \
+  --tp "${TEACHER_TP}" \
   --mem-fraction-static "${TEACHER_MEM_FRACTION}" \
   >"${TEACHER_LOG}" 2>&1 &
 TEACHER_PID=$!
@@ -477,7 +492,7 @@ ray start \
   --head \
   --node-ip-address 127.0.0.1 \
   --port "${RAY_PORT}" \
-  --num-gpus 2 \
+  --num-gpus "${RAY_NUM_GPUS}" \
   --disable-usage-stats \
   --dashboard-host 127.0.0.1 \
   --dashboard-port "${RAY_DASHBOARD_PORT}" \
@@ -486,10 +501,10 @@ STARTED_RAY=1
 
 MODEL_ARGS=(
   --swiglu
-  --num-layers 36
-  --hidden-size 2560
-  --ffn-hidden-size 9728
-  --num-attention-heads 32
+  --num-layers 28
+  --hidden-size 2048
+  --ffn-hidden-size 6144
+  --num-attention-heads 16
   --group-query-attention
   --num-query-groups 8
   --use-rotary-position-embeddings
@@ -511,9 +526,8 @@ fi
 
 TRAIN_ARGS=(
   --actor-num-nodes 1
-  --actor-num-gpus-per-node 2
-  --num-gpus-per-node 2
-  --colocate
+  --actor-num-gpus-per-node "${TRAIN_ACTOR_GPUS_PER_NODE}"
+  --num-gpus-per-node "${RAY_NUM_GPUS}"
   --hf-checkpoint "${STUDENT_MODEL}"
   --ref-load "${STUDENT_MODEL}"
   --megatron-to-hf-mode bridge
@@ -524,6 +538,7 @@ TRAIN_ARGS=(
   --input-key messages
   --label-key answer
   --apply-chat-template
+  --apply-chat-template-kwargs "${APPLY_CHAT_TEMPLATE_KWARGS}"
   --rollout-shuffle
   --rm-type math
   --reward-key accuracy
@@ -570,15 +585,13 @@ TRAIN_ARGS=(
   --expert-model-parallel-size 1
   --expert-tensor-parallel-size 1
   --qkv-format "${QKV_FORMAT}"
-  --rollout-num-gpus 2
-  --rollout-num-gpus-per-engine 2
+  --rollout-num-gpus "${ROLLOUT_NUM_GPUS}"
+  --rollout-num-gpus-per-engine "${ROLLOUT_NUM_GPUS_PER_ENGINE}"
   --sglang-mem-fraction-static "${STUDENT_SGLANG_MEM_FRACTION}"
   --sglang-max-running-requests "${SGLANG_MAX_RUNNING_REQUESTS}"
   --sglang-enable-metrics
   --attention-dropout 0.0
   --hidden-dropout 0.0
-  --accumulate-allreduce-grads-in-fp32
-  --attention-softmax-in-fp32
   --attention-backend flash
 )
 

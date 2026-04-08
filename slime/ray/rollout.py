@@ -514,34 +514,27 @@ class RolloutManager:
         response_token_ids = sample.tokens[-sample.response_length :] if sample.response_length > 0 else []
         student_log_probs = self._maybe_to_list(sample.rollout_log_probs) or []
         teacher_log_probs = self._maybe_to_list(sample.teacher_log_probs) or []
+        reward_info = sample.reward if isinstance(sample.reward, dict) else {}
 
         tokenizer = self._trajectory_tokenizer
         if tokenizer is not None and response_token_ids:
             response_tokens = tokenizer.convert_ids_to_tokens(response_token_ids)
             response_token_text = [tokenizer.decode([tok], skip_special_tokens=False) for tok in response_token_ids]
         else:
-            response_tokens = None
-            response_token_text = None
+            response_tokens = [None] * len(response_token_ids)
+            response_token_text = [None] * len(response_token_ids)
 
-        per_token = []
-        for i, token_id in enumerate(response_token_ids):
-            student_score = student_log_probs[i] if i < len(student_log_probs) else None
-            teacher_score = teacher_log_probs[i] if i < len(teacher_log_probs) else None
-            per_token.append(
-                {
-                    "position": i,
-                    "token_id": token_id,
-                    "token": response_tokens[i] if response_tokens is not None else None,
-                    "text": response_token_text[i] if response_token_text is not None else None,
-                    "student_log_prob": student_score,
-                    "teacher_log_prob": teacher_score,
-                    "student_minus_teacher": (
-                        None
-                        if student_score is None or teacher_score is None
-                        else float(student_score) - float(teacher_score)
-                    ),
-                }
+        student_minus_teacher_log_probs = [
+            (
+                None
+                if i >= len(student_log_probs)
+                or i >= len(teacher_log_probs)
+                or student_log_probs[i] is None
+                or teacher_log_probs[i] is None
+                else float(student_log_probs[i]) - float(teacher_log_probs[i])
             )
+            for i in range(len(response_token_ids))
+        ]
 
         return {
             "sample_index": sample.index,
@@ -552,12 +545,24 @@ class RolloutManager:
             "label": sample.label,
             "reward": self._maybe_to_list(sample.reward),
             "metadata": self._maybe_to_list(sample.metadata),
+            "student_extracted_answer": reward_info.get("student_extracted_answer"),
+            "target_answer": reward_info.get("target_answer"),
+            "student_answer_parseable": reward_info.get("student_answer_parseable"),
+            "student_boxed_answer": reward_info.get("student_boxed_answer"),
+            "student_boxed_format_valid": reward_info.get("student_boxed_format_valid"),
+            "student_answer_correct": reward_info.get("student_answer_correct"),
+            "student_answer_reward": reward_info.get("student_answer_reward"),
+            "student_grade_accuracy": reward_info.get("accuracy"),
             "tokens": self._maybe_to_list(sample.tokens),
             "response_length": sample.response_length,
             "response_token_ids": response_token_ids,
+            "response_tokens": response_tokens,
+            "response_token_text": response_token_text,
             "student_log_probs": student_log_probs,
             "teacher_log_probs": teacher_log_probs,
-            "per_token_scores": per_token,
+            "student_minus_teacher_log_probs": student_minus_teacher_log_probs,
+            "student_teacher_token_score_diff": student_minus_teacher_log_probs,
+            "student_teacher_token_score_diff_type": "selected_token_logprob_delta",
         }
 
     def _save_rollout_trajectories(self, samples: list[Sample], rollout_id: int):
@@ -1027,6 +1032,43 @@ def compute_metrics_from_samples(args, samples):
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
+
+    student_answer_rewards = []
+    student_grade_accuracies = []
+    student_answer_parse_flags = []
+    student_boxed_format_flags = []
+    for sample in samples:
+        reward_info = sample.reward if isinstance(sample.reward, dict) else {}
+        if reward_info.get("student_answer_reward") is not None:
+            student_answer_rewards.append(float(reward_info["student_answer_reward"]))
+        if reward_info.get("accuracy") is not None:
+            student_grade_accuracies.append(float(reward_info["accuracy"]))
+        if reward_info.get("student_answer_parseable") is not None:
+            student_answer_parse_flags.append(float(bool(reward_info["student_answer_parseable"])))
+        elif reward_info.get("student_extracted_answer") is not None:
+            student_answer_parse_flags.append(1.0)
+        if reward_info.get("student_boxed_format_valid") is not None:
+            student_boxed_format_flags.append(float(bool(reward_info["student_boxed_format_valid"])))
+
+    if student_answer_rewards:
+        mean_student_answer_reward = np.mean(student_answer_rewards).item()
+        log_dict["student_answer_reward"] = mean_student_answer_reward
+        log_dict["student_answer_accuracy"] = mean_student_answer_reward
+
+    if student_grade_accuracies:
+        mean_student_grade_accuracy = np.mean(student_grade_accuracies).item()
+        log_dict["student_grade_accuracy"] = mean_student_grade_accuracy
+        if student_answer_rewards:
+            grade_minus_strict_accuracy = mean_student_grade_accuracy - log_dict["student_answer_accuracy"]
+            log_dict["student_grade_minus_strict_accuracy"] = grade_minus_strict_accuracy
+            log_dict["student_answer_accuracy_vs_grade_gap"] = grade_minus_strict_accuracy
+
+    if student_answer_parse_flags:
+        log_dict["student_answer_parse_rate"] = np.mean(student_answer_parse_flags).item()
+
+    if student_boxed_format_flags:
+        log_dict["student_boxed_format_rate"] = np.mean(student_boxed_format_flags).item()
+
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
