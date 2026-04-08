@@ -15,6 +15,19 @@ from slime.utils.types import Sample
 _BOXED_PREFIX = r"\boxed"
 _FINAL_ANSWER_PREFIX = "Final Answer:"
 
+_TRAILING_SPECIAL_MARKERS = ("<|im_end|>", "</s>", "<|endoftext|>")
+
+def _strip_trailing_special_markers(text: str) -> str:
+    cleaned = text.rstrip()
+    changed = True
+    while changed:
+        changed = False
+        for marker in _TRAILING_SPECIAL_MARKERS:
+            if cleaned.endswith(marker):
+                cleaned = cleaned[: -len(marker)].rstrip()
+                changed = True
+    return cleaned
+
 
 def _extract_braced_content(text: str, open_brace_index: int) -> tuple[str | None, int | None]:
     if open_brace_index >= len(text) or text[open_brace_index] != "{":
@@ -61,6 +74,7 @@ def _extract_last_boxed_content(text: str) -> str | None:
 
 
 def _extract_strict_final_line_boxed_content(text: str) -> str | None:
+    text = _strip_trailing_special_markers(text)
     non_empty_lines = [line.strip() for line in text.splitlines() if line.strip()]
     if not non_empty_lines:
         return None
@@ -162,10 +176,11 @@ def _extract_student_answer_info(sample: Sample) -> dict[str, str | bool | None]
     }
 
 
-async def reward_func(args, sample, **kwargs):
-    payload = {
-        # "text": sample.prompt + sample.response,
-        "input_ids": sample.tokens,
+def _build_teacher_payload(sample: Sample) -> dict[str, object]:
+    metadata = sample.metadata if isinstance(sample.metadata, dict) else {}
+    teacher_prompt_text = metadata.get("teacher_prompt_text")
+
+    payload: dict[str, object] = {
         "sampling_params": {
             "temperature": 0,
             "max_new_tokens": 0,
@@ -174,6 +189,18 @@ async def reward_func(args, sample, **kwargs):
         "return_logprob": True,
         "logprob_start_len": 0,
     }
+
+    if isinstance(teacher_prompt_text, str) and teacher_prompt_text.strip():
+        # PI / privileged-prompt OPD: teacher sees its own prompt plus the exact student response.
+        payload["text"] = teacher_prompt_text + (sample.response or "")
+    else:
+        payload["input_ids"] = sample.tokens
+
+    return payload
+
+
+async def reward_func(args, sample, **kwargs):
+    payload = _build_teacher_payload(sample)
     session_kwargs = {}
     async with aiohttp.ClientSession(**session_kwargs) as session:
         async with session.post(args.rm_url, json=payload) as resp:

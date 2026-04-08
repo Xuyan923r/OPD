@@ -8,7 +8,8 @@ from slime.rollout.sglang_rollout import generate as _generate_base
 from slime.utils.types import Sample
 
 MMLU_PRO_FINAL_ANSWER_INSTRUCTION = (
-    "Reason step by step, then end with exactly one final line in the format:\n"
+    "Think through the problem carefully and write out your detailed reasoning. "
+    "Then end with exactly one final non-empty line in the format:\n"
     "Final Answer: \\boxed{A}\n"
     "Replace A with the single correct option letter only. Do not put any extra text inside \\boxed{}."
 )
