@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nohup bash /idfsdata/yexuyan/OPD/examples/launch_opd_qwen3_8b_to_1p7b_science_boxed_16x4_gpu4567_flat.sh > /idfsdata/yexuyan/OPD/runlogs/flat_launcher_$(date -u +%Y%m%d
+# nohup bash /idfsdata/yexuyan/OPD/examples/launch_opd_qwen3_8b_to_1p7b_science_boxed_64x1_gpu0123_flat.sh > /idfsdata/yexuyan/OPD/runlogs/flat64x1_launcher_$(date -u +%Y%m%d_%H%M%S).log 2>&1 &
 
 set -euo pipefail
 
@@ -23,10 +23,10 @@ EVAL_CONFIG="/idfsdata/yexuyan/OPD/examples/mmlu_pro_dev40_eval.yaml"
 
 TEACHER_GPUS="0"
 STUDENT_GPUS="1,2,3"
-TEACHER_PORT="31081"
-RAY_PORT="6381"
-RAY_DASHBOARD_PORT="8266"
-RAY_TEMP_DIR="/idfsdata/yexuyan/"
+TEACHER_PORT="31080"
+RAY_PORT="6380"
+RAY_DASHBOARD_PORT="8265"
+RAY_TEMP_DIR="/idfsdata/yexuyan/opd_ray_tmp_0123_64x1"
 
 NUM_EPOCH="1"
 ROLLOUT_BATCH_SIZE="64"
@@ -64,7 +64,7 @@ ENABLE_SEQUENCE_PARALLEL="0"
 QKV_FORMAT="bshd"
 USE_DYNAMIC_BATCH_SIZE="0"
 
-RUN_ID="opd_qwen3_8b_to_1p7b_science_boxed_16x4_flat_$(date -u +%Y%m%d_%H%M%S)"
+RUN_ID="opd_qwen3_8b_to_1p7b_science_boxed_64x1_gpu0123_flat_$(date -u +%Y%m%d_%H%M%S)"
 RUN_ROOT="${ROOT_DIR}/runs/${RUN_ID}"
 LOG_ROOT="${ROOT_DIR}/runlogs"
 MAIN_LOG="${LOG_ROOT}/${RUN_ID}.log"
@@ -98,20 +98,37 @@ if [[ -n "${CUDA_LIB64}" ]]; then
   export LIBRARY_PATH="${CUDA_LIB64}${LIBRARY_PATH:+:${LIBRARY_PATH}}"
 fi
 
-for g in 4 5 6 7; do
-  nvidia-smi -i "$g" --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null
- done | awk 'NF' | sort -u | xargs -r kill -9
+# ==========================================
+# 修改后的清理逻辑：仅杀掉 GPU 0, 1, 2, 3 上属于 yexuyan 的进程
+# ==========================================
+echo "Cleaning up processes for user $(whoami) on GPUs 0, 1, 2, 3..."
+for g in 0 1 2 3; do
+  # 获取指定 GPU 上的所有 PID
+  pids=$(nvidia-smi -i "$g" --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null || true)
+  if [[ -z "$pids" ]]; then continue; fi
+  
+  for pid in $pids; do
+    # 检查 PID 的所有者是否是当前用户
+    if ps -p "$pid" -o user= | grep -q "$(whoami)"; then
+      echo "Killing own process $pid on GPU $g"
+      kill -9 "$pid" 2>/dev/null || true
+    fi
+  done
+done
 
-pkill -9 -f 'sglang.launch_server' || true
-pkill -9 -f 'ray::' || true
-pkill -9 -f 'raylet' || true
-pkill -9 -f 'gcs_server' || true
-pkill -9 -f 'dashboard.py' || true
-pkill -9 -f 'train.py' || true
-pkill -9 -f '/idfsdata/yexuyan/OPD/models/Qwen3-8B' || true
-pkill -9 -f '/idfsdata/yexuyan/OPD/models/Qwen3-1.7B' || true
+# 使用 -u 确保只 kill 自己的进程名匹配项
+pkill -u "$(whoami)" -9 -f 'sglang.launch_server' || true
+pkill -u "$(whoami)" -9 -f 'ray::' || true
+pkill -u "$(whoami)" -9 -f 'raylet' || true
+pkill -u "$(whoami)" -9 -f 'gcs_server' || true
+pkill -u "$(whoami)" -9 -f 'dashboard.py' || true
+pkill -u "$(whoami)" -9 -f 'train.py' || true
+pkill -u "$(whoami)" -9 -f "${TEACHER_MODEL}" || true
+pkill -u "$(whoami)" -9 -f "${STUDENT_MODEL}" || true
+
 ray stop --force || true
 sleep 3
+# ==========================================
 
 python "${ROOT_DIR}/scripts/check_slime_env.py" \
   --repo-root "${ROOT_DIR}" \

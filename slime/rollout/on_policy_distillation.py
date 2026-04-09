@@ -1,3 +1,5 @@
+import asyncio
+import os
 import aiohttp
 import torch
 
@@ -16,6 +18,26 @@ _BOXED_PREFIX = r"\boxed"
 _FINAL_ANSWER_PREFIX = "Final Answer:"
 
 _TRAILING_SPECIAL_MARKERS = ("<|im_end|>", "</s>", "<|endoftext|>")
+
+_TEACHER_REQUEST_SEMAPHORE: asyncio.Semaphore | None = None
+_TEACHER_REQUEST_CONCURRENCY = max(
+    1,
+    int(
+        os.getenv(
+            "OPD_TEACHER_RM_CONCURRENCY",
+            os.getenv("OPD_PI_TEACHER_RM_CONCURRENCY", "1"),
+        )
+    ),
+)
+
+
+def _get_teacher_request_semaphore() -> asyncio.Semaphore:
+    global _TEACHER_REQUEST_SEMAPHORE
+    if _TEACHER_REQUEST_SEMAPHORE is None:
+        _TEACHER_REQUEST_SEMAPHORE = asyncio.Semaphore(_TEACHER_REQUEST_CONCURRENCY)
+    return _TEACHER_REQUEST_SEMAPHORE
+
+
 
 def _strip_trailing_special_markers(text: str) -> str:
     cleaned = text.rstrip()
@@ -176,9 +198,50 @@ def _extract_student_answer_info(sample: Sample) -> dict[str, str | bool | None]
     }
 
 
+def _build_student_only_eval_reward(sample: Sample) -> dict[str, object]:
+    answer_info = _extract_student_answer_info(sample)
+    strict_correct = bool(answer_info["student_answer_correct"])
+    return {
+        "accuracy": 1.0 if strict_correct else 0.0,
+        **answer_info,
+        "student_answer_reward": 1.0 if strict_correct else 0.0,
+    }
+
+
+async def reward_func_student_only_eval(args, sample, **kwargs):
+    return _build_student_only_eval_reward(sample)
+
+
+def _extract_aligned_teacher_log_probs(teacher_output: dict | None, response_length: int) -> torch.Tensor:
+    meta_info = teacher_output.get("meta_info") if isinstance(teacher_output, dict) else None
+    input_token_logprobs = meta_info.get("input_token_logprobs") if isinstance(meta_info, dict) else None
+
+    values: list[float | None] = []
+    if isinstance(input_token_logprobs, list):
+        for item in input_token_logprobs:
+            logprob = None
+            if isinstance(item, (list, tuple)) and len(item) > 0:
+                logprob = item[0]
+            elif isinstance(item, dict):
+                logprob = item.get("logprob")
+            values.append(None if logprob is None else float(logprob))
+
+    if len(values) == response_length + 1 and values and values[0] is None:
+        values = values[1:]
+    elif len(values) > response_length:
+        values = values[-response_length:]
+    elif len(values) < response_length:
+        values = [None] * (response_length - len(values)) + values
+
+    return torch.tensor([
+        0.0 if value is None else value for value in values
+    ], dtype=torch.float32)
+
+
 def _build_teacher_payload(sample: Sample) -> dict[str, object]:
     metadata = sample.metadata if isinstance(sample.metadata, dict) else {}
     teacher_prompt_text = metadata.get("teacher_prompt_text")
+    teacher_logprob_start_len = metadata.get("teacher_logprob_start_len")
 
     payload: dict[str, object] = {
         "sampling_params": {
@@ -193,6 +256,10 @@ def _build_teacher_payload(sample: Sample) -> dict[str, object]:
     if isinstance(teacher_prompt_text, str) and teacher_prompt_text.strip():
         # PI / privileged-prompt OPD: teacher sees its own prompt plus the exact student response.
         payload["text"] = teacher_prompt_text + (sample.response or "")
+        # We only need log-probs aligned to the student response. Requesting log-probs
+        # for the entire privileged prompt wastes memory and can OOM the teacher server.
+        if isinstance(teacher_logprob_start_len, int) and teacher_logprob_start_len >= 0:
+            payload["logprob_start_len"] = teacher_logprob_start_len
     else:
         payload["input_ids"] = sample.tokens
 
@@ -202,10 +269,16 @@ def _build_teacher_payload(sample: Sample) -> dict[str, object]:
 async def reward_func(args, sample, **kwargs):
     payload = _build_teacher_payload(sample)
     session_kwargs = {}
+    metadata = sample.metadata if isinstance(sample.metadata, dict) else {}
+    teacher_prompt_text = metadata.get("teacher_prompt_text")
+
     async with aiohttp.ClientSession(**session_kwargs) as session:
-        async with session.post(args.rm_url, json=payload) as resp:
-            resp.raise_for_status()
-            teacher_output = await resp.json()
+        # Throttle all teacher RM requests, including eval requests that do not carry
+        # privileged-prompt metadata, so step-0 validation cannot overwhelm the teacher server.
+        async with _get_teacher_request_semaphore():
+            async with session.post(args.rm_url, json=payload) as resp:
+                resp.raise_for_status()
+                teacher_output = await resp.json()
 
     answer_info = _extract_student_answer_info(sample)
 
@@ -247,14 +320,12 @@ def post_process_rewards(args, samples: list[Sample], **kwargs):
             raw_rewards.append(0.0)
         teacher_outputs.append(teacher_output)
 
-    # Extract teacher log-probs from the sglang response
+    # Extract teacher log-probs from the sglang response and robustly align them to
+    # the response segment. Some sglang responses include an initial null log-prob slot,
+    # while others already return exactly response_length values.
     teacher_log_probs = [
-        torch.tensor([item[0] for item in reward["meta_info"]["input_token_logprobs"][1:]], dtype=torch.float32)
-        for reward in teacher_outputs
-    ]
-    teacher_log_probs = [
-        t_log_prob[-response_length:]
-        for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
+        _extract_aligned_teacher_log_probs(teacher_output, response_length)
+        for teacher_output, response_length in zip(teacher_outputs, response_lengths, strict=False)
     ]
 
     for sample, t_log_probs in zip(samples, teacher_log_probs, strict=False):

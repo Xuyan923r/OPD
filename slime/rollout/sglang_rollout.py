@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import os
 import inspect
 import logging
 import uuid
@@ -256,7 +257,7 @@ async def generate_and_rm(
 
         # for multi agent system, the reward of some sample is calculated during generation.
         samples_need_reward = [sample for sample in samples if sample.reward is None]
-        rewards = await batched_async_rm(args, samples_need_reward)
+        rewards = await batched_async_rm(args, samples_need_reward, evaluation_use_rule_rm=evaluation)
         for sample, reward in zip(samples_need_reward, rewards, strict=False):
             sample.reward = reward
         return samples
@@ -265,7 +266,7 @@ async def generate_and_rm(
             return sample
         # for multi-turn environment, a reward could be assigned to the agent.
         if sample.reward is None:
-            sample.reward = await async_rm(args, sample)
+            sample.reward = await async_rm(args, sample, evaluation_use_rule_rm=evaluation)
 
     return sample
 
@@ -297,7 +298,7 @@ async def generate_and_rm_group(
 
     # for the rm that need the whole group, we will do the rm here
     if not state.aborted and args.group_rm:
-        rewards = await batched_async_rm(args, group)
+        rewards = await batched_async_rm(args, group, evaluation_use_rule_rm=evaluation)
         for sample, reward in zip(group, rewards, strict=False):
             sample.reward = reward
 
@@ -510,6 +511,18 @@ async def eval_rollout_single_dataset(
         spaces_between_special_tokens=False,
     )
 
+    eval_concurrency = max(1, int(os.getenv("SLIME_EVAL_CONCURRENCY", "1")))
+
+    async def _run_eval_sample(sample: Sample, sampling_params: dict[str, Any], semaphore: asyncio.Semaphore) -> Sample:
+        async with semaphore:
+            return await generate_and_rm(
+                args,
+                sample,
+                sampling_params=sampling_params,
+                evaluation=True,
+            )
+
+    semaphore = asyncio.Semaphore(eval_concurrency)
     tasks = []
     # do multiple samples for eval prompts
     sample_index = 0
@@ -525,16 +538,7 @@ async def eval_rollout_single_dataset(
             if getattr(args, "sglang_enable_deterministic_inference", False):
                 sampling_params = base_sampling_params.copy()
                 sampling_params["sampling_seed"] = args.rollout_seed + j
-            tasks.append(
-                asyncio.create_task(
-                    generate_and_rm(
-                        args,
-                        sample,
-                        sampling_params=sampling_params,
-                        evaluation=True,
-                    )
-                )
-            )
+            tasks.append(asyncio.create_task(_run_eval_sample(sample, sampling_params, semaphore)))
 
     data = []
     do_print = True

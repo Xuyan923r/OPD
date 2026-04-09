@@ -15,6 +15,7 @@ models
 # Distribution / packaging
 .Python
 build/
+.codex
 develop-eggs/
 dist/
 downloads/

@@ -513,8 +513,33 @@ class RolloutManager:
     def _build_trajectory_record(self, sample: Sample) -> dict[str, Any]:
         response_token_ids = sample.tokens[-sample.response_length :] if sample.response_length > 0 else []
         student_log_probs = self._maybe_to_list(sample.rollout_log_probs) or []
-        teacher_log_probs = self._maybe_to_list(sample.teacher_log_probs) or []
         reward_info = sample.reward if isinstance(sample.reward, dict) else {}
+
+        teacher_log_probs = self._maybe_to_list(sample.teacher_log_probs) or []
+        if not teacher_log_probs:
+            # Trajectories are saved before _convert_samples_to_train_data(), so
+            # sample.teacher_log_probs may still be empty. Recover teacher token
+            # log-probs directly from reward.teacher_output as a fallback.
+            teacher_output = reward_info.get("teacher_output") if isinstance(reward_info, dict) else None
+            meta_info = teacher_output.get("meta_info") if isinstance(teacher_output, dict) else None
+            input_token_logprobs = meta_info.get("input_token_logprobs") if isinstance(meta_info, dict) else None
+            if isinstance(input_token_logprobs, list):
+                recovered = []
+                for item in input_token_logprobs:
+                    logprob = None
+                    if isinstance(item, (list, tuple)) and len(item) > 0:
+                        logprob = item[0]
+                    elif isinstance(item, dict):
+                        logprob = item.get("logprob")
+                    recovered.append(None if logprob is None else float(logprob))
+
+                if len(recovered) == sample.response_length + 1 and recovered and recovered[0] is None:
+                    recovered = recovered[1:]
+                elif len(recovered) > sample.response_length:
+                    recovered = recovered[-sample.response_length :]
+                elif len(recovered) < sample.response_length:
+                    recovered = [None] * (sample.response_length - len(recovered)) + recovered
+                teacher_log_probs = recovered
 
         tokenizer = self._trajectory_tokenizer
         if tokenizer is not None and response_token_ids:

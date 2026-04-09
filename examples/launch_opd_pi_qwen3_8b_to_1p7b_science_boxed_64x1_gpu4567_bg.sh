@@ -17,16 +17,16 @@ RAW_DATA="/idfsdata/yexuyan/OPD/data/science_with_answer.jsonl"
 PREPARED_DATA="/idfsdata/yexuyan/OPD/data/science_with_answer_opd_pi_prompt_only_boxed.jsonl"
 EVAL_CONFIG="/idfsdata/yexuyan/OPD/examples/mmlu_pro_dev40_eval.yaml"
 
-TEACHER_GPUS="0"
-STUDENT_GPUS="1,2,3"
-TEACHER_PORT="32081"
-RAY_PORT="6382"
-RAY_DASHBOARD_PORT="8267"
-RAY_TEMP_DIR="/idfsdata/yexuyan/opd_ray_tmp_pi_0123"
+TEACHER_GPUS="4"
+STUDENT_GPUS="5,6,7"
+TEACHER_PORT="31081"
+RAY_PORT="6381"
+RAY_DASHBOARD_PORT="8266"
+RAY_TEMP_DIR="/idfsdata/yexuyan/opd_ray_tmp_pi_4567"
 
 NUM_EPOCH="1"
-ROLLOUT_BATCH_SIZE="16"
-N_SAMPLES_PER_PROMPT="4"
+ROLLOUT_BATCH_SIZE="64"
+N_SAMPLES_PER_PROMPT="1"
 GLOBAL_BATCH_SIZE="64"
 ROLLOUT_MAX_PROMPT_LEN="4096"
 ROLLOUT_MAX_RESPONSE_LEN="6000"
@@ -46,13 +46,13 @@ TEACHER_MAX_RUNNING_REQUESTS="2"
 TEACHER_CHUNKED_PREFILL_SIZE="2048"
 export SLIME_EVAL_CONCURRENCY="1"
 export OPD_TEACHER_RM_CONCURRENCY="1"
-STUDENT_SGLANG_MEM_FRACTION="0.50"
+STUDENT_SGLANG_MEM_FRACTION="0.30"
 SGLANG_MAX_RUNNING_REQUESTS="12"
 WANDB_PROJECT="OPSD"
 APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 EVAL_INTERVAL="5"
 SAVE_INTERVAL="20"
-MAX_CHECKPOINTS="10"
+MAX_CHECKPOINTS="11"
 TRAIN_ACTOR_GPUS_PER_NODE="2"
 ROLLOUT_NUM_GPUS="1"
 ROLLOUT_NUM_GPUS_PER_ENGINE="1"
@@ -60,7 +60,7 @@ RAY_NUM_GPUS="3"
 TEACHER_TP="1"
 QKV_FORMAT="bshd"
 
-RUN_ID="opd_pi_qwen3_8b_to_1p7b_science_boxed_16x4_gpu0123"
+RUN_ID="opd_pi_qwen3_8b_to_1p7b_science_boxed_64x1_gpu4567"
 RUN_ROOT="${ROOT_DIR}/runs/${RUN_ID}"
 LOG_ROOT="${ROOT_DIR}/runlogs"
 MAIN_LOG="${LOG_ROOT}/${RUN_ID}.log"
@@ -101,7 +101,7 @@ mkdir -p "${RUN_ROOT}" "${LOG_ROOT}" "${RUN_ROOT}/pids" "${RUN_ROOT}/checkpoints
     export LIBRARY_PATH="${CUDA_LIB64}${LIBRARY_PATH:+:${LIBRARY_PATH}}"
   fi
 
-  for g in 0 1 2 3; do
+  for g in 4 5 6 7; do
     nvidia-smi -i "$g" --query-compute-apps=pid --format=csv,noheader,nounits 2>/dev/null
   done | awk 'NF' | sort -u | xargs -r kill -9
 
@@ -142,6 +142,7 @@ student_format_instruction = (
     "Replace A with the single correct option letter only. Do not put any extra text inside \\boxed{}."
 )
 
+
 def normalize_answer(answer: object) -> str | None:
     text = str(answer).strip().upper()
     if len(text) == 1 and text.isalpha():
@@ -163,6 +164,7 @@ def build_teacher_user_content(user_message: str, answer: str) -> str:
         + "\n"
         + student_format_instruction
     )
+
 
 tokenizer = AutoTokenizer.from_pretrained(tokenizer_model, trust_remote_code=True)
 prepared_path.parent.mkdir(parents=True, exist_ok=True)
@@ -346,6 +348,7 @@ PY
     --eval-max-response-len "${ROLLOUT_MAX_RESPONSE_LEN}"
     --eval-top-k 1
     --num-epoch "${NUM_EPOCH}"
+    --train-iters 203
     --rollout-batch-size "${ROLLOUT_BATCH_SIZE}"
     --n-samples-per-prompt "${N_SAMPLES_PER_PROMPT}"
     --rollout-max-prompt-len "${ROLLOUT_MAX_PROMPT_LEN}"

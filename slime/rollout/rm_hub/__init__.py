@@ -28,6 +28,12 @@ async def remote_rm(args, sample: Sample):
 
 
 async def async_rm(args, sample: Sample, **kwargs):
+    if kwargs.pop("evaluation_use_rule_rm", False):
+        if args.custom_rm_path == "slime.rollout.on_policy_distillation.reward_func":
+            from slime.rollout.on_policy_distillation import reward_func_student_only_eval
+
+            return await reward_func_student_only_eval(args, sample, **kwargs)
+
     if args.custom_rm_path is not None:
         rm_function = load_function(args.custom_rm_path)
         return await rm_function(args, sample, **kwargs)
@@ -79,7 +85,7 @@ async def batched_async_rm(
     samples: list[Sample],
     **kwargs,
 ) -> list[int | float]:
-    if args.custom_rm_path is not None:
+    if args.custom_rm_path is not None and not kwargs.get("evaluation_use_rule_rm", False):
         # Ensure the custom reward function is implemented in batch mode
         rm_function = load_function(args.custom_rm_path)
         return await rm_function(args, samples, **kwargs)
