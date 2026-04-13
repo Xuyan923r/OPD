@@ -204,3 +204,6 @@ _examples_synced/
 runlogs
 runs
 .codex
+.triton/cache
+.config/vllm
+evaluation

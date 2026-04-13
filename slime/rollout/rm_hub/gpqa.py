@@ -42,6 +42,21 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
+def _normalize_prompt_option_layout(prompt_text: str) -> str:
+    """
+    Some datasets concatenate the first option directly after the question mark, e.g. "...?A: ...".
+    Insert a newline before inline option markers so option parsing can stay line-based and robust.
+    """
+    if not prompt_text:
+        return ""
+
+    return re.sub(
+        r"([?。!！])\s*((?:\([A-Z]\)|[A-Z])\s*[:.)]\s+)",
+        r"\1\n\2",
+        prompt_text,
+    )
+
+
 def _prompt_to_text(prompt) -> str:
     if isinstance(prompt, str):
         return prompt
@@ -88,6 +103,7 @@ def _extract_letters_from_prompt(prompt_text: str) -> list[str]:
     if not prompt_text:
         return []
 
+    prompt_text = _normalize_prompt_option_layout(prompt_text)
     letters = []
     seen = set()
     pattern = re.compile(r"(?m)^\s*(?:\(([A-Z])\)|([A-Z]))\s*[:.)]\s+")
@@ -106,6 +122,7 @@ def _extract_choices_from_prompt(prompt_text: str) -> list[str]:
     if not prompt_text:
         return []
 
+    prompt_text = _normalize_prompt_option_layout(prompt_text)
     pattern = re.compile(r"(?m)^\s*(?:\(([A-Z])\)|([A-Z]))\s*[:.)]\s+(.*)$")
     choices = []
     for match in pattern.finditer(prompt_text):
@@ -141,7 +158,11 @@ def _resolve_valid_letters(
 
     prompt_letters = _extract_letters_from_prompt(prompt_text)
     if prompt_letters:
-        return prompt_letters
+        # Keep option space contiguous from A to the largest observed option.
+        # This avoids missing "A" when prompts are formatted like "...?A: ...\nB: ...".
+        max_letter = max(prompt_letters, key=lambda ch: ord(ch))
+        max_index = ord(max_letter) - ord("A") + 1
+        return list(string.ascii_uppercase[:max_index])
 
     if choices:
         return list(string.ascii_uppercase[: len(choices)])

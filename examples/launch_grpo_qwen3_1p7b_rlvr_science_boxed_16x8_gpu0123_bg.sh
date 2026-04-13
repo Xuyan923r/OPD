@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# nohup bash /idfsdata/yexuyan/OPD/examples/launch_opd_qwen3_8b_to_1p7b_science_boxed_64x1_gpu0123_flat.sh > /idfsdata/yexuyan/OPD/runlogs/flat64x1_launcher_$(date -u +%Y%m%d_%H%M%S).log 2>&1 &
+# nohup bash /idfsdata/yexuyan/OPD/examples/launch_grpo_qwen3_1p7b_rlvr_science_boxed_16x8_gpu0123_bg.sh > /idfsdata/yexuyan/OPD/runlogs/grpo_1p7b_rlvr_16x8_gpu4567_launcher_$(date -u +%Y%m%d_%H%M%S).log 2>&1 &
 
 set -euo pipefail
 
@@ -14,87 +14,60 @@ CUDA_HOME="/usr/local/cuda"
 HOST_CC="/usr/bin/gcc-11"
 HOST_CXX="/usr/bin/g++-11"
 HOST_CUDAHOSTCXX="/usr/bin/g++-11"
-XDG_CACHE_HOME="${XDG_CACHE_HOME:-${ROOT_DIR}/.cache}"
-FLASHINFER_WORKSPACE_BASE="${FLASHINFER_WORKSPACE_BASE:-${ROOT_DIR}}"
 
-TEACHER_MODEL="/idfsdata/yexuyan/OPD/models/Qwen3-8B"
-STUDENT_MODEL="/idfsdata/yexuyan/OPD/models/Qwen3-1.7B"
+MODEL_PATH="/idfsdata/yexuyan/OPD/models/Qwen3-1.7B"
 RAW_DATA="/idfsdata/yexuyan/OPD/data/science_with_answer.jsonl"
-PREPARED_DATA="/idfsdata/yexuyan/OPD/data/science_with_answer_opd_prompt_only_boxed.jsonl"
+PREPARED_DATA="/idfsdata/yexuyan/OPD/data/science_with_answer_grpo_rlvr_prompt_only_boxed.jsonl"
 EVAL_CONFIG="/idfsdata/yexuyan/OPD/examples/mmlu_pro_dev40_eval.yaml"
 
-TEACHER_GPUS="${TEACHER_GPUS:-0}"
-STUDENT_GPUS="${STUDENT_GPUS:-1,2,3}"
-TEACHER_PORT="${TEACHER_PORT:-31080}"
-RAY_PORT="${RAY_PORT:-6380}"
-RAY_DASHBOARD_PORT="${RAY_DASHBOARD_PORT:-8265}"
-RAY_TEMP_DIR="${RAY_TEMP_DIR:-/idfsdata/yexuyan/opd_ray_tmp_0123_64x1}"
-RAY_DASHBOARD_AGENT_LISTEN_PORT="${RAY_DASHBOARD_AGENT_LISTEN_PORT:-52380}"
-RAY_DASHBOARD_AGENT_GRPC_PORT="${RAY_DASHBOARD_AGENT_GRPC_PORT:-52381}"
-RAY_RUNTIME_ENV_AGENT_PORT="${RAY_RUNTIME_ENV_AGENT_PORT:-52382}"
-RAY_METRICS_EXPORT_PORT="${RAY_METRICS_EXPORT_PORT:-52383}"
+STUDENT_GPUS="4,5,6,7"
+RAY_PORT="6384"
+RAY_DASHBOARD_PORT="8269"
+RAY_TEMP_DIR="/tmp/ray_g4567_rlvr"
+RAY_DASHBOARD_AGENT_LISTEN_PORT="52780"
+RAY_DASHBOARD_AGENT_GRPC_PORT="52781"
+RAY_RUNTIME_ENV_AGENT_PORT="52782"
+RAY_METRICS_EXPORT_PORT="52783"
 CURRENT_USER="$(whoami)"
-TRAIN_PYTHON_BIN="${TRAIN_PYTHON_BIN:-/idfsdata/yexuyan/conda_envs/slime/bin/python}"
 
 NUM_EPOCH="${NUM_EPOCH:-1}"
-NUM_ROLLOUT="${NUM_ROLLOUT:-}"
-ROLLOUT_BATCH_SIZE="64"
-N_SAMPLES_PER_PROMPT="1"
-GLOBAL_BATCH_SIZE="64"
+NUM_ROLLOUT="${NUM_ROLLOUT:-205}"
+ROLLOUT_BATCH_SIZE="16"
+N_SAMPLES_PER_PROMPT="8"
+GLOBAL_BATCH_SIZE="128"
 ROLLOUT_MAX_PROMPT_LEN="4096"
 ROLLOUT_MAX_RESPONSE_LEN="6000"
 ROLLOUT_TEMPERATURE="1.0"
 ROLLOUT_TOP_P="0.95"
 TRAIN_SEQ_LENGTH="8192"
-MAX_TOKENS_PER_GPU="6144"
 MICRO_BATCH_SIZE="1"
 LOG_PROBS_CHUNK_SIZE="64"
 TRAIN_MEMORY_MARGIN_BYTES="1073741824"
 TRAIN_PYTORCH_CUDA_ALLOC_CONF="max_split_size_mb:64,garbage_collection_threshold:0.6"
-ENABLE_ACTIVATION_RECOMPUTE="1"
 RECOMPUTE_GRANULARITY="full"
 RECOMPUTE_METHOD="uniform"
 RECOMPUTE_NUM_LAYERS="1"
-ENABLE_LOSS_RECOMPUTE="1"
-TEACHER_MEM_FRACTION="0.85"
-TEACHER_MAX_RUNNING_REQUESTS="${TEACHER_MAX_RUNNING_REQUESTS:-}"
-TEACHER_CHUNKED_PREFILL_SIZE="${TEACHER_CHUNKED_PREFILL_SIZE:-}"
-STUDENT_SGLANG_MEM_FRACTION="0.30"
-SGLANG_MAX_RUNNING_REQUESTS="12"
+STUDENT_SGLANG_MEM_FRACTION="0.45"
+SGLANG_MAX_RUNNING_REQUESTS="32"
 WANDB_PROJECT="OPSD"
-APPLY_CHAT_TEMPLATE_KWARGS="${APPLY_CHAT_TEMPLATE_KWARGS:-'{"enable_thinking": false}'}"
+APPLY_CHAT_TEMPLATE_KWARGS='{"enable_thinking": false}'
 EVAL_INTERVAL="5"
 SAVE_INTERVAL="20"
-MAX_CHECKPOINTS="${MAX_CHECKPOINTS:-10}"
+MAX_CHECKPOINTS="${MAX_CHECKPOINTS:-0}"
 TRAIN_ACTOR_GPUS_PER_NODE="2"
-ROLLOUT_NUM_GPUS="1"
+ROLLOUT_NUM_GPUS="2"
 ROLLOUT_NUM_GPUS_PER_ENGINE="1"
-RAY_NUM_GPUS="3"
-TEACHER_TP="1"
-ENABLE_SEQUENCE_PARALLEL="0"
+RAY_NUM_GPUS="4"
 QKV_FORMAT="bshd"
-USE_DYNAMIC_BATCH_SIZE="0"
 
-declare -a CLEANUP_GPUS=()
-while IFS= read -r gpu; do
-  [[ -z "${gpu}" ]] && continue
-  CLEANUP_GPUS+=("${gpu}")
-done < <(printf '%s\n' "${TEACHER_GPUS},${STUDENT_GPUS}" | tr ',' '\n' | tr -d ' ' | awk '/^[0-9]+$/ && !seen[$0]++ {print $0}')
-if (( ${#CLEANUP_GPUS[@]} == 0 )); then
-  CLEANUP_GPUS=(0 1 2 3)
-fi
-CLEANUP_GPUS_CSV="$(IFS=,; echo "${CLEANUP_GPUS[*]}")"
-
-RUN_ID_PREFIX="${RUN_ID_PREFIX:-opd_qwen3_8b_to_1p7b_science_boxed_64x1_gpu0123_flat}"
-RUN_ID="${RUN_ID_PREFIX}_$(date -u +%Y%m%d_%H%M%S)"
+RUN_ID="grpo_qwen3_1p7b_rlvr_science_boxed_16x8_gpu4567_$(date -u +%Y%m%d_%H%M%S)"
 RUN_ROOT="${ROOT_DIR}/runs/${RUN_ID}"
 LOG_ROOT="${ROOT_DIR}/runlogs"
 MAIN_LOG="${LOG_ROOT}/${RUN_ID}.log"
-TEACHER_LOG="${LOG_ROOT}/${RUN_ID}_teacher.log"
+LAUNCHER_LOG="${LOG_ROOT}/${RUN_ID}_launcher.log"
 TRAJECTORY_DIR="${RUN_ROOT}/rollout_trajectories"
 
-FLASHINFER_JIT_DIR="${XDG_CACHE_HOME}/flashinfer_jit/${RUN_ID}"
-mkdir -p "${RUN_ROOT}" "${LOG_ROOT}" "${RUN_ROOT}/pids" "${RUN_ROOT}/checkpoints" "${XDG_CACHE_HOME}" "${FLASHINFER_JIT_DIR}" "${FLASHINFER_WORKSPACE_BASE}/.cache/flashinfer"
+mkdir -p "${RUN_ROOT}" "${LOG_ROOT}" "${RUN_ROOT}/pids" "${RUN_ROOT}/checkpoints" "${RAY_TEMP_DIR}"
 
 set +u
 source "${CONDA_SH}"
@@ -104,14 +77,9 @@ set -u
 export CC="${HOST_CC}"
 export CXX="${HOST_CXX}"
 export CUDAHOSTCXX="${HOST_CUDAHOSTCXX}"
-export XDG_CACHE_HOME
-export FLASHINFER_JIT_DIR
-export FLASHINFER_WORKSPACE_BASE
 export PYTHONUNBUFFERED=1
 export no_proxy="127.0.0.1,localhost"
 export NO_PROXY="127.0.0.1,localhost"
-# Prevent inherited stale flashinfer flags from forcing old ccbin paths.
-unset FLASHINFER_EXTRA_CFLAGS FLASHINFER_EXTRA_CUDAFLAGS
 unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY all_proxy ALL_PROXY
 
 CUDA_LIB64=""
@@ -164,9 +132,8 @@ kill_own_port_listener() {
   done < <(lsof -t -iTCP:"${port}" -sTCP:LISTEN 2>/dev/null || true)
 }
 
-echo "Cleaning only ${CURRENT_USER}'s processes on GPUs ${CLEANUP_GPUS_CSV} and ports ${TEACHER_PORT}/${RAY_PORT}/${RAY_DASHBOARD_PORT}/${RAY_DASHBOARD_AGENT_LISTEN_PORT}/${RAY_DASHBOARD_AGENT_GRPC_PORT}/${RAY_RUNTIME_ENV_AGENT_PORT}/${RAY_METRICS_EXPORT_PORT}..."
-kill_own_gpu_processes "${CLEANUP_GPUS[@]}"
-kill_own_port_listener "${TEACHER_PORT}"
+echo "Cleaning only ${CURRENT_USER}'s processes on GPUs 4,5,6,7 and ports ${RAY_PORT}/${RAY_DASHBOARD_PORT}/${RAY_DASHBOARD_AGENT_LISTEN_PORT}/${RAY_DASHBOARD_AGENT_GRPC_PORT}/${RAY_RUNTIME_ENV_AGENT_PORT}/${RAY_METRICS_EXPORT_PORT}..."
+kill_own_gpu_processes 4 5 6 7
 kill_own_port_listener "${RAY_PORT}"
 kill_own_port_listener "${RAY_DASHBOARD_PORT}"
 kill_own_port_listener "${RAY_DASHBOARD_AGENT_LISTEN_PORT}"
@@ -179,18 +146,38 @@ python "${ROOT_DIR}/scripts/check_slime_env.py" \
   --repo-root "${ROOT_DIR}" \
   --sglang-src "${SGLANG_SRC}" \
   --megatron-src "${MEGATRON_LM_PATH}" \
-  --teacher-model "${TEACHER_MODEL}" \
-  --student-model "${STUDENT_MODEL}" \
+  --teacher-model "${MODEL_PATH}" \
+  --student-model "${MODEL_PATH}" \
   --raw-data "${RAW_DATA}"
 
 RAW_DATA="${RAW_DATA}" PREPARED_DATA="${PREPARED_DATA}" python - <<'PY'
 import json
 import os
+import re
 from pathlib import Path
 
 raw_path = Path(os.environ["RAW_DATA"])
 prepared_path = Path(os.environ["PREPARED_DATA"])
 prepared_path.parent.mkdir(parents=True, exist_ok=True)
+
+format_instruction = (
+    "\n\nThink through the problem carefully and write out your detailed reasoning. "
+    "The very last non-empty line must be exactly in the format: Final Answer: \\boxed{A}\n"
+    "Replace A with the single correct option letter only. Do not put any extra text inside \\boxed{}."
+)
+
+def normalize_answer(answer: object) -> str | None:
+    text = str(answer).strip().upper()
+    if len(text) == 1 and text.isalpha():
+        return text
+    boxed_match = re.search(r"\\BOXED\{\s*([A-Z])\s*\}", text)
+    if boxed_match:
+        return boxed_match.group(1)
+    letter_match = re.search(r"\b([A-Z])\b", text)
+    if letter_match:
+        return letter_match.group(1)
+    return None
+
 count = 0
 with raw_path.open("r", encoding="utf-8") as src, prepared_path.open("w", encoding="utf-8") as dst:
     for line in src:
@@ -204,14 +191,9 @@ with raw_path.open("r", encoding="utf-8") as src, prepared_path.open("w", encodi
             if message.get("role") == "user" and message.get("content"):
                 user_message = message.get("content")
                 break
-        answer = item.get("answer")
+        answer = normalize_answer(item.get("answer"))
         if not user_message or answer is None:
             continue
-        format_instruction = (
-            "\n\nThink through the problem carefully and write out your detailed reasoning. "
-            "The very last non-empty line must be exactly in the format: Final Answer: \\boxed{A}\n"
-            "Replace A with the single correct option letter only. Do not put any extra text inside \\boxed{}."
-        )
         cleaned = {
             "messages": [{"role": "user", "content": user_message + format_instruction}],
             "answer": answer,
@@ -221,19 +203,14 @@ with raw_path.open("r", encoding="utf-8") as src, prepared_path.open("w", encodi
         count += 1
 if count == 0:
     raise SystemExit("Prepared dataset is empty.")
-print(f"Prepared {count} prompt-only OPD samples at {prepared_path}")
+print(f"Prepared {count} RLVR prompt-only samples at {prepared_path}")
 PY
 
-TEACHER_PID=""
 PRUNER_PID=""
 STARTED_RAY=0
 
 cleanup() {
   local exit_code=$?
-  if [[ -n "${TEACHER_PID}" ]] && kill -0 "${TEACHER_PID}" 2>/dev/null; then
-    kill "${TEACHER_PID}" 2>/dev/null || true
-    wait "${TEACHER_PID}" 2>/dev/null || true
-  fi
   if [[ -n "${PRUNER_PID}" ]] && kill -0 "${PRUNER_PID}" 2>/dev/null; then
     kill "${PRUNER_PID}" 2>/dev/null || true
     wait "${PRUNER_PID}" 2>/dev/null || true
@@ -245,7 +222,7 @@ cleanup() {
     kill_own_port_listener "${RAY_DASHBOARD_AGENT_GRPC_PORT}"
     kill_own_port_listener "${RAY_RUNTIME_ENV_AGENT_PORT}"
     kill_own_port_listener "${RAY_METRICS_EXPORT_PORT}"
-    kill_own_gpu_processes "${CLEANUP_GPUS[@]}"
+    kill_own_gpu_processes 4 5 6 7
   fi
   exit "${exit_code}"
 }
@@ -274,39 +251,6 @@ if (( MAX_CHECKPOINTS > 0 )); then
   echo "${PRUNER_PID}" > "${RUN_ROOT}/pids/checkpoint_pruner.pid"
 else
   echo "Checkpoint pruning disabled (MAX_CHECKPOINTS=${MAX_CHECKPOINTS})."
-fi
-
-CUDA_VISIBLE_DEVICES="${TEACHER_GPUS}" \
-python -m sglang.launch_server \
-  --model-path "${TEACHER_MODEL}" \
-  --host 127.0.0.1 \
-  --port "${TEACHER_PORT}" \
-  --tp "${TEACHER_TP}" \
-  --mem-fraction-static "${TEACHER_MEM_FRACTION}" \
-  ${TEACHER_MAX_RUNNING_REQUESTS:+--max-running-requests "${TEACHER_MAX_RUNNING_REQUESTS}"} \
-  ${TEACHER_CHUNKED_PREFILL_SIZE:+--chunked-prefill-size "${TEACHER_CHUNKED_PREFILL_SIZE}"} \
-  >"${TEACHER_LOG}" 2>&1 &
-TEACHER_PID=$!
-echo "${TEACHER_PID}" > "${RUN_ROOT}/pids/teacher.pid"
-
-echo "Started teacher server: pid=${TEACHER_PID}"
-echo "Teacher log: ${TEACHER_LOG}"
-
-for _ in $(seq 1 120); do
-  if ! kill -0 "${TEACHER_PID}" 2>/dev/null; then
-    echo "Teacher server exited early. Check ${TEACHER_LOG}" >&2
-    exit 1
-  fi
-  if curl -sf "http://127.0.0.1:${TEACHER_PORT}/health_generate" >/dev/null; then
-    echo "Teacher server is healthy on port ${TEACHER_PORT}"
-    break
-  fi
-  sleep 5
-done
-
-if ! curl -sf "http://127.0.0.1:${TEACHER_PORT}/health_generate" >/dev/null; then
-  echo "Teacher server did not become healthy in time. Check ${TEACHER_LOG}" >&2
-  exit 1
 fi
 
 CUDA_VISIBLE_DEVICES="${STUDENT_GPUS}" \
@@ -350,8 +294,7 @@ TRAIN_ARGS=(
   --actor-num-nodes 1
   --actor-num-gpus-per-node "${TRAIN_ACTOR_GPUS_PER_NODE}"
   --num-gpus-per-node "${RAY_NUM_GPUS}"
-  --hf-checkpoint "${STUDENT_MODEL}"
-  --ref-load "${STUDENT_MODEL}"
+  --hf-checkpoint "${MODEL_PATH}"
   --megatron-to-hf-mode bridge
   --save "${RUN_ROOT}/checkpoints"
   --save-interval "${SAVE_INTERVAL}"
@@ -362,12 +305,11 @@ TRAIN_ARGS=(
   --apply-chat-template
   --apply-chat-template-kwargs "${APPLY_CHAT_TEMPLATE_KWARGS}"
   --rollout-shuffle
-  --rm-type math
+  --rm-type mmlu_pro
   --reward-key accuracy
   --eval-reward-key accuracy
-  --custom-rm-path slime.rollout.on_policy_distillation.reward_func
-  --custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
-  --rm-url "http://127.0.0.1:${TEACHER_PORT}/generate"
+  --custom-rm-path slime.rollout.rlvr_student_only.reward_func
+  --custom-reward-post-process-path slime.rollout.rlvr_student_only.post_process_rewards
   --eval-interval "${EVAL_INTERVAL}"
   --eval-config "${EVAL_CONFIG}"
   --n-samples-per-eval-prompt 1
@@ -384,12 +326,6 @@ TRAIN_ARGS=(
   --train-env-vars "${TRAIN_ENV_VARS_JSON}"
   --train-memory-margin-bytes "${TRAIN_MEMORY_MARGIN_BYTES}"
   --log-probs-chunk-size "${LOG_PROBS_CHUNK_SIZE}"
-  --use-opd
-  --opd-type sglang
-  --opd-kl-coef 1.0
-  --use-kl-loss
-  --kl-loss-coef 0.00
-  --kl-loss-type low_var_kl
   --entropy-coef 0.00
   --eps-clip 0.2
   --eps-clip-high 0.28
@@ -431,7 +367,7 @@ else
   TRAIN_ARGS+=(--num-epoch "${NUM_EPOCH}")
 fi
 
-RUNTIME_ENV_JSON="$(ROOT_DIR="${ROOT_DIR}" MEGATRON_LM_PATH="${MEGATRON_LM_PATH}" CUDA_HOME="${CUDA_HOME}" CUDA_LIB64="${CUDA_LIB64}" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" LIBRARY_PATH="${LIBRARY_PATH:-}" HOST_CC="${HOST_CC}" HOST_CXX="${HOST_CXX}" HOST_CUDAHOSTCXX="${HOST_CUDAHOSTCXX}" XDG_CACHE_HOME="${XDG_CACHE_HOME}" FLASHINFER_JIT_DIR="${FLASHINFER_JIT_DIR}" FLASHINFER_WORKSPACE_BASE="${FLASHINFER_WORKSPACE_BASE}" python - <<'PY'
+RUNTIME_ENV_JSON="$(ROOT_DIR="${ROOT_DIR}" MEGATRON_LM_PATH="${MEGATRON_LM_PATH}" CUDA_HOME="${CUDA_HOME}" CUDA_LIB64="${CUDA_LIB64}" LD_LIBRARY_PATH="${LD_LIBRARY_PATH:-}" LIBRARY_PATH="${LIBRARY_PATH:-}" HOST_CC="${HOST_CC}" HOST_CXX="${HOST_CXX}" HOST_CUDAHOSTCXX="${HOST_CUDAHOSTCXX}" python - <<'PY'
 import json
 import os
 print(json.dumps({
@@ -441,15 +377,9 @@ print(json.dumps({
         "CUDA_HOME": os.environ.get("CUDA_HOME", ""),
         "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", ""),
         "LIBRARY_PATH": os.environ.get("LIBRARY_PATH", ""),
-        "XDG_CACHE_HOME": os.environ.get("XDG_CACHE_HOME", ""),
-        "FLASHINFER_JIT_DIR": os.environ.get("FLASHINFER_JIT_DIR", ""),
-        "FLASHINFER_WORKSPACE_BASE": os.environ.get("FLASHINFER_WORKSPACE_BASE", ""),
-        # Ensure flashinfer/sglang JIT kernels use CUDA-supported host toolchain.
         "CC": os.environ.get("HOST_CC", ""),
         "CXX": os.environ.get("HOST_CXX", ""),
         "CUDAHOSTCXX": os.environ.get("HOST_CUDAHOSTCXX", ""),
-        "FLASHINFER_EXTRA_CFLAGS": "",
-        "FLASHINFER_EXTRA_CUDAFLAGS": "",
         "no_proxy": "127.0.0.1,localhost",
         "NO_PROXY": "127.0.0.1,localhost",
     }
@@ -459,14 +389,14 @@ PY
 
 echo "Run ID: ${RUN_ID}"
 echo "Run root: ${RUN_ROOT}"
-echo "Main training command is being submitted to Ray..."
-echo "Teacher GPUs: ${TEACHER_GPUS}"
+echo "Prepared RLVR data: ${PREPARED_DATA}"
 echo "Student GPUs: ${STUDENT_GPUS}"
 echo "Trajectory dir: ${TRAJECTORY_DIR}"
+echo "Submitting Ray job..."
 
 CUDA_VISIBLE_DEVICES="${STUDENT_GPUS}" \
 ray job submit \
   --address "http://127.0.0.1:${RAY_DASHBOARD_PORT}" \
   --runtime-env-json "${RUNTIME_ENV_JSON}" \
-  -- "${TRAIN_PYTHON_BIN}" "${ROOT_DIR}/train.py" "${MODEL_ARGS[@]}" "${TRAIN_ARGS[@]}" \
+  -- python "${ROOT_DIR}/train.py" "${MODEL_ARGS[@]}" "${TRAIN_ARGS[@]}" \
   2>&1 | tee "${MAIN_LOG}"
